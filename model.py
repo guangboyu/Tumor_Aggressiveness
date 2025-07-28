@@ -9,54 +9,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class EarlyFusionResNet(nn.Module):
-    """
-    Early fusion ResNet model that takes concatenated CT sequences as input.
-    Input: (B, C, D, H, W) where C = number of CT sequences (e.g., 4 for A, D, N, V)
-    """
-    
-    def __init__(
-        self,
-        in_channels: int = 4,  # Number of CT sequences
-        num_classes: int = 2,
-        spatial_dims: int = 3,
-        model_depth: int = 18,  # 18, 34, 50, 101, 152
-        pretrained: bool = False,
-        dropout_rate: float = 0.5
-    ):
-        super().__init__()
-        
-        # Use MONAI's 3D ResNet
-        self.backbone = resnet.ResNet(
-            spatial_dims=spatial_dims,
-            n_input_channels=in_channels,  # <-- change here
-            num_classes=num_classes,
-            block_type='basic' if model_depth <= 34 else 'bottleneck',
-            layers=self._get_layer_config(model_depth),
-            dropout_prob=dropout_rate
-        )
-        
-        logger.info(f"EarlyFusionResNet initialized with {in_channels} input channels")
-    
-    def _get_layer_config(self, model_depth: int) -> Tuple[int, int, int, int]:
-        """Get layer configuration based on model depth."""
-        configs = {
-            18: (2, 2, 2, 2),
-            34: (3, 4, 6, 3),
-            50: (3, 4, 6, 3),
-            101: (3, 4, 23, 3),
-            152: (3, 8, 36, 3)
-        }
-        return configs.get(model_depth, (2, 2, 2, 2))
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input tensor of shape (B, C, D, H, W)
-        Returns:
-            logits: Output logits of shape (B, num_classes)
-        """
-        return self.backbone(x)
+# Early fusion removed - CT modalities are not registered
+# class EarlyFusionResNet(nn.Module):
+#     """
+#     Early fusion ResNet model that takes concatenated CT sequences as input.
+#     Input: (B, C, D, H, W) where C = number of CT sequences (e.g., 4 for A, D, N, V)
+#     NOTE: This is not appropriate for unregistered CT modalities
+#     """
 
 
 class IntermediateFusionResNet(nn.Module):
@@ -335,11 +294,12 @@ class EnsembleResNet(nn.Module):
 class TumorClassificationModel(nn.Module):
     """
     Main model class that can handle different fusion strategies.
+    Note: Early fusion removed since CT modalities are not registered.
     """
     
     def __init__(
         self,
-        fusion_strategy: str = 'early',
+        fusion_strategy: str = 'intermediate',
         num_sequences: int = 4,
         num_classes: int = 2,
         spatial_dims: int = 3,
@@ -353,17 +313,7 @@ class TumorClassificationModel(nn.Module):
         
         self.fusion_strategy = fusion_strategy
         
-        if fusion_strategy == 'early':
-            self.model = EarlyFusionResNet(
-                in_channels=num_sequences,
-                num_classes=num_classes,
-                spatial_dims=spatial_dims,
-                model_depth=model_depth,
-                pretrained=pretrained,
-                dropout_rate=dropout_rate
-            )
-        
-        elif fusion_strategy == 'intermediate':
+        if fusion_strategy == 'intermediate':
             self.model = IntermediateFusionResNet(
                 num_sequences=num_sequences,
                 num_classes=num_classes,
@@ -384,7 +334,7 @@ class TumorClassificationModel(nn.Module):
             )
         
         else:
-            raise ValueError(f"Unknown fusion strategy: {fusion_strategy}")
+            raise ValueError(f"Unsupported fusion strategy: {fusion_strategy}. Use 'intermediate' or 'ensemble'")
         
         logger.info(f"TumorClassificationModel initialized with {fusion_strategy} fusion strategy")
     
@@ -394,13 +344,9 @@ class TumorClassificationModel(nn.Module):
         
         Args:
             x: Input data format depends on fusion strategy:
-                - 'early': (B, C, D, H, W) tensor
                 - 'intermediate'/'ensemble': List of (B, 1, D, H, W) tensors
         """
-        if self.fusion_strategy == 'early':
-            return self.model(x)
-        else:
-            return self.model(x)
+        return self.model(x)
     
     def get_model_info(self) -> Dict:
         """Get information about the model configuration."""
@@ -417,25 +363,10 @@ class TumorClassificationModel(nn.Module):
 
 # Example usage and testing
 if __name__ == "__main__":
-    # Test different model configurations
+    # Test different model configurations (early fusion removed for unregistered modalities)
     batch_size = 2
     spatial_dims = 3
     target_size = (64, 64, 64)
-    
-    # # Test Early Fusion
-    # print("Testing Early Fusion Model:")
-    # early_model = TumorClassificationModel(
-    #     fusion_strategy='early',
-    #     num_sequences=4,
-    #     num_classes=2,
-    #     model_depth=18
-    # )
-    
-    # early_input = torch.randn(batch_size, 4, *target_size)  # (B, 4, D, H, W)
-    # early_output = early_model(early_input)
-    # print(f"Early fusion input shape: {early_input.shape}")
-    # print(f"Early fusion output shape: {early_output.shape}")
-    # print(f"Model info: {early_model.get_model_info()}")
     
     # Test Intermediate Fusion
     print("\nTesting Intermediate Fusion Model:")
@@ -453,18 +384,18 @@ if __name__ == "__main__":
     print(f"Intermediate fusion output shape: {intermediate_output.shape}")
     print(f"Model info: {intermediate_model.get_model_info()}")
     
-    # # Test Ensemble Model
-    # print("\nTesting Ensemble Model:")
-    # ensemble_model = TumorClassificationModel(
-    #     fusion_strategy='ensemble',
-    #     num_sequences=4,
-    #     num_classes=2,
-    #     model_depth=18,
-    #     ensemble_method='weighted_voting'
-    # )
+    # Test Ensemble Model
+    print("\nTesting Ensemble Model:")
+    ensemble_model = TumorClassificationModel(
+        fusion_strategy='ensemble',
+        num_sequences=4,
+        num_classes=2,
+        model_depth=18,
+        ensemble_method='weighted_voting'
+    )
     
-    # ensemble_input = [torch.randn(batch_size, 1, *target_size) for _ in range(4)]  # List of (B, 1, D, H, W)
-    # ensemble_output = ensemble_model(ensemble_input)
-    # print(f"Ensemble input: {len(ensemble_input)} sequences of shape {ensemble_input[0].shape}")
-    # print(f"Ensemble output shape: {ensemble_output.shape}")
-    # print(f"Model info: {ensemble_model.get_model_info()}") 
+    ensemble_input = [torch.randn(batch_size, 1, *target_size) for _ in range(4)]  # List of (B, 1, D, H, W)
+    ensemble_output = ensemble_model(ensemble_input)
+    print(f"Ensemble input: {len(ensemble_input)} sequences of shape {ensemble_input[0].shape}")
+    print(f"Ensemble output shape: {ensemble_output.shape}")
+    print(f"Model info: {ensemble_model.get_model_info()}") 

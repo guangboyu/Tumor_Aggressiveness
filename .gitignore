@@ -50,6 +50,8 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+*test*.py
+z_*.py
 
 # Translations
 *.mo
@@ -248,8 +250,6 @@ site/
 
 # Local development
 local_settings.py
-settings_local.py
+settings_local.py 
 
-# Test and temporary files
-z_*.py
-*test*.py
+RECORD.md

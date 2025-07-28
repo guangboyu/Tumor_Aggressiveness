@@ -256,11 +256,11 @@ def main():
     
     train_loader = data_loader.create_train_loader()
     internal_val_loader = data_loader.create_internal_val_loader()
-    external_test_loader = data_loader.create_external_test_loader()
+    # external_test_loader = data_loader.create_external_test_loader()
     
     logger.info(f"Train samples: {len(train_loader.dataset) if hasattr(train_loader.dataset, '__len__') else 'Unknown'}")
     logger.info(f"Internal validation samples: {len(internal_val_loader.dataset) if hasattr(internal_val_loader.dataset, '__len__') else 'Unknown'}")
-    logger.info(f"External test samples: {len(external_test_loader.dataset) if hasattr(external_test_loader.dataset, '__len__') else 'Unknown'}")
+    # logger.info(f"External test samples: {len(external_test_loader.dataset) if hasattr(external_test_loader.dataset, '__len__') else 'Unknown'}")
     
     # Create model
     logger.info("Creating model...")
@@ -361,18 +361,18 @@ def main():
         model, internal_val_loader, device, args.fusion_strategy
     )
     
-    # Test on external test set
-    logger.info("Testing on external test set...")
-    external_test_metrics, external_results = test_model(
-        model, external_test_loader, device, args.fusion_strategy
-    )
+    # # Test on external test set
+    # logger.info("Testing on external test set...")
+    # external_test_metrics, external_results = test_model(
+    #     model, external_test_loader, device, args.fusion_strategy
+    # )
     
     # Save test results
     test_results = {
         'internal_test': internal_test_metrics,
-        'external_test': external_test_metrics,
+        # 'external_test': external_test_metrics,
         'internal_predictions': internal_results,
-        'external_predictions': external_results
+        # 'external_predictions': external_results
     }
     
     results_path = os.path.join(output_dir, 'test_results.json')
@@ -383,8 +383,8 @@ def main():
     logger.info("Final Results:")
     logger.info(f"Internal Test - AUC: {internal_test_metrics['auc']:.4f}, "
                f"Accuracy: {internal_test_metrics['accuracy']:.4f}")
-    logger.info(f"External Test - AUC: {external_test_metrics['auc']:.4f}, "
-               f"Accuracy: {external_test_metrics['accuracy']:.4f}")
+    # logger.info(f"External Test - AUC: {external_test_metrics['auc']:.4f}, "
+    #            f"Accuracy: {external_test_metrics['accuracy']:.4f}")
     
     # Close tensorboard writer
     writer.close()

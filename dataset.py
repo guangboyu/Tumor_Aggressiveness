@@ -3,11 +3,9 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-import nibabel as nib
-import nrrd
+import torchio as tio
 from typing import List, Dict, Optional, Tuple, Union
 import warnings
-from scipy import ndimage
 import logging
 
 # Set up logging
@@ -16,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class TumorAggressivenessDataset(Dataset):
     """
-    Universal dataset for tumor aggressiveness classification supporting multiple fusion strategies.
+    Simplified tumor aggressiveness classification dataset using TorchIO.
     
     Fusion Strategies:
     - 'early': Concatenate all CT sequences as channels (4 channels: A, D, N, V)
@@ -79,135 +77,182 @@ class TumorAggressivenessDataset(Dataset):
         # Cache for storing loaded data
         self.data_cache = {} if cache_data else None
         
-        # Statistics for normalization
-        self.ct_stats = None
+        # Create file path manifest during initialization
+        self.file_paths = self._create_file_path_manifest()
+        
+        # Create TorchIO transforms
+        self.tio_transforms = self._create_tio_transforms()
         
         if verbose:
             logger.info(f"Dataset initialized with {len(self.data)} samples")
             logger.info(f"CT types: {self.ct_types}")
             logger.info(f"Fusion strategy: {fusion_strategy}")
             logger.info(f"Target size: {target_size}")
+            logger.info(f"File path manifest created with {len(self.file_paths)} valid samples")
     
-    def _load_ct_sequence(self, patient_folder: str, ct_type: str) -> np.ndarray:
-        """Load a single CT sequence for a given patient and sequence type."""
+    def _create_file_path_manifest(self) -> Dict[str, Dict[str, Dict[str, str]]]:
+        """
+        Create a manifest of all file paths during initialization.
+        Returns a dictionary mapping patient_id to file paths for each CT type.
+        """
+        file_paths = {}
+        
+        if self.verbose:
+            logger.info("Creating file path manifest...")
+        
+        # Determine parent folder names based on data root
         if '1.Training' in self.ct_root:
-            parent_folder = '1.Training_DICOM_603'
+            ct_parent_folder = '1.Training_DICOM_603'
+            voi_parent_folder = '1.Training_VOI_603'
         elif '2.Internal' in self.ct_root:
-            parent_folder = '2.Internal Test_DICOM_259'
+            ct_parent_folder = '2.Internal Test_DICOM_259'
+            voi_parent_folder = '2.Internal Test_VOI_259'
         elif '3.External' in self.ct_root:
-            parent_folder = '3.External Test_DICOM_308'
+            ct_parent_folder = '3.External Test_DICOM_308'
+            voi_parent_folder = '3.External Test_VOI_308'
         else:
-            parent_folder = self.ct_root  # fallback
-        ct_base = os.path.join('Data', 'data_nifty', parent_folder, patient_folder, 'CT')
-        if not os.path.exists(ct_base):
-            raise FileNotFoundError(f"CT base path not found: {ct_base}")
-        # Find any folder that matches ct_type_*
-        ct_folders = [f for f in os.listdir(ct_base) if f.startswith(f"{ct_type}_") and os.path.isdir(os.path.join(ct_base, f))]
-        if not ct_folders:
-            raise FileNotFoundError(f"No CT folder found for type {ct_type} in {ct_base}")
-        ct_path = os.path.join(ct_base, ct_folders[0])
-
-        nii_files = [f for f in os.listdir(ct_path) if f.endswith('.nii.gz')]
-        if not nii_files:
-            raise FileNotFoundError(f"No NIfTI file found in {ct_path}")
-        ct_file = os.path.join(ct_path, nii_files[0])
-        ct_img = nib.load(ct_file).get_fdata()
-        return np.array(ct_img)
-    
-    def _load_voi_mask(self, patient_folder: str, ct_type: str) -> np.ndarray:
-        """Load VOI mask for a given patient and sequence type."""
-        # Use the correct parent folder for ROI
-        if '1.Training' in self.voi_root:
-            parent_folder = '1.Training_ROI_603'
-        elif '2.Internal' in self.voi_root:
-            parent_folder = '2.Internal Test_ROI_259'
-        elif '3.External' in self.voi_root:
-            parent_folder = '3.External Test_ROI_308'
-        else:
-            parent_folder = self.voi_root  # fallback
-        voi_path = os.path.join('Data', 'ROI', parent_folder, patient_folder, 'ROI')
-        if not os.path.exists(voi_path):
-            raise FileNotFoundError(f"VOI path not found: {voi_path}")
-        # Find any file that matches ct_type_*.nrrd
-        voi_files = [f for f in os.listdir(voi_path) if f.startswith(f"{ct_type}_") and f.endswith('.nrrd')]
-        if not voi_files:
-            # Try alternative naming pattern (just ct_type.nrrd)
-            voi_files = [f for f in os.listdir(voi_path) if f == f"{ct_type}.nrrd"]
-        if not voi_files:
-            raise FileNotFoundError(f"VOI file not found for type {ct_type} in {voi_path}")
-        voi_file = os.path.join(voi_path, voi_files[0])
-        voi_img, _ = nrrd.read(voi_file)
-        return np.array(voi_img)
-    
-    def _resample_volume(self, volume: np.ndarray, target_size: Tuple[int, int, int]) -> np.ndarray:
-        """Resample volume to target size using trilinear interpolation."""
-        if volume.shape == target_size:
-            return volume
+            ct_parent_folder = self.ct_root
+            voi_parent_folder = self.voi_root
         
-        # Calculate zoom factors
-        zoom_factors = [target_size[i] / volume.shape[i] for i in range(3)]
+        valid_samples = 0
         
-        # Resample using scipy
-        resampled = ndimage.zoom(volume, zoom_factors, order=1)
-        
-        return resampled
-    
-    def _normalize_ct(self, ct_volume: np.ndarray) -> np.ndarray:
-        """Normalize CT values to [0, 1] range."""
-        # Clip to reasonable HU range
-        ct_volume = np.clip(ct_volume, -1000, 1000)
-        
-        # Normalize to [0, 1]
-        ct_volume = (ct_volume + 1000) / 2000
-        
-        return ct_volume
-    
-    def _apply_voi_mask(self, ct_volume: np.ndarray, voi_mask: np.ndarray) -> np.ndarray:
-        """Apply VOI mask to CT volume."""
-        # Ensure same shape
-        if ct_volume.shape != voi_mask.shape:
-            voi_mask = self._resample_volume(voi_mask, ct_volume.shape)
-        
-        # Apply mask
-        masked_ct = ct_volume * (voi_mask > 0)
-        
-        return masked_ct
-    
-    def _load_and_preprocess_sample(self, name_id: str, pinyin: str) -> Dict[str, np.ndarray]:
-        """Load and preprocess all CT sequences and VOI masks for a sample."""
-        sample_data = {}
-        patient_folder = f"{pinyin}_{name_id}"
-        for ct_type in self.ct_types:
-            try:
-                ct_volume = self._load_ct_sequence(patient_folder, ct_type)
-                voi_mask = self._load_voi_mask(patient_folder, ct_type)
-                if self.apply_voi_mask:
-                    ct_volume = self._apply_voi_mask(ct_volume, voi_mask)
-                ct_volume = self._resample_volume(ct_volume, self.target_size)
-                if self.normalize:
-                    ct_volume = self._normalize_ct(ct_volume)
-                sample_data[ct_type] = ct_volume
-            except Exception as e:
+        for idx in range(len(self.data)):
+            row = self.data.iloc[idx]
+            name_id = row['serial_number']
+            pinyin = row['pinyin']
+            patient_folder = f"{pinyin}_{name_id}"
+            
+            patient_paths = {}
+            all_sequences_available = True
+            
+            for ct_type in self.ct_types:
+                # CT file path
+                ct_base = os.path.join('Data', 'data_nifty', ct_parent_folder, patient_folder, 'CT')
+                ct_path = None
+                
+                if os.path.exists(ct_base):
+                    # Find any folder that matches ct_type_*
+                    ct_folders = [f for f in os.listdir(ct_base) if f.startswith(f"{ct_type}_") and os.path.isdir(os.path.join(ct_base, f))]
+                    if ct_folders:
+                        ct_folder_path = os.path.join(ct_base, ct_folders[0])
+                        nii_files = [f for f in os.listdir(ct_folder_path) if f.endswith('.nii.gz')]
+                        if nii_files:
+                            ct_path = os.path.join(ct_folder_path, nii_files[0])
+                
+                # VOI file path
+                voi_path = os.path.join('Data', 'VOI_nifty', voi_parent_folder, patient_folder, 'VOI', f"{ct_type}.nii.gz")
+                
+                # Check if both CT and VOI files exist
+                if ct_path and os.path.exists(ct_path) and os.path.exists(voi_path):
+                    patient_paths[ct_type] = {
+                        'ct_path': ct_path,
+                        'voi_path': voi_path
+                    }
+                else:
+                    all_sequences_available = False
+                    if self.verbose:
+                        logger.warning(f"Missing files for {patient_folder} - {ct_type}: CT={ct_path}, VOI={voi_path}")
+            
+            # Only include patients with all required sequences
+            if all_sequences_available:
+                file_paths[name_id] = patient_paths
+                valid_samples += 1
+            else:
                 if self.verbose:
-                    logger.warning(f"Error loading {ct_type} for {patient_folder}: {str(e)}")
-                sample_data[ct_type] = np.zeros(self.target_size)
+                    logger.warning(f"Skipping {patient_folder} - missing required sequences")
+        
+        if self.verbose:
+            logger.info(f"File path manifest created: {valid_samples}/{len(self.data)} samples have all required sequences")
+        
+        return file_paths
+    
+    def _create_tio_transforms(self) -> tio.Transform:
+        """
+        Create TorchIO transforms for preprocessing.
+        """
+        transforms = []
+        
+        # Resize to target size
+        transforms.append(tio.Resize(self.target_size))
+        
+        # Normalize CT values if requested
+        if self.normalize:
+            transforms.append(tio.Clamp(out_min=-1000, out_max=1000))
+            transforms.append(tio.ZNormalization())
+        
+        # Apply additional transforms if provided
+        if self.transform:
+            transforms.append(self.transform)
+        
+        return tio.Compose(transforms)
+    
+    def _load_sample_with_tio(self, name_id: str) -> Dict[str, torch.Tensor]:
+        """
+        Load a sample using TorchIO.
+        """
+        # Get pre-computed file paths for this patient
+        if name_id not in self.file_paths:
+            raise ValueError(f"No file paths found for patient {name_id}")
+        
+        patient_paths = self.file_paths[name_id]
+        
+        # Create TorchIO subject
+        subject_dict = {}
+        
+        for ct_type in self.ct_types:
+            ct_path = patient_paths[ct_type]['ct_path']
+            voi_path = patient_paths[ct_type]['voi_path']
+            
+            # Load CT image
+            ct_image = tio.ScalarImage(ct_path)
+            subject_dict[f'ct_{ct_type}'] = ct_image
+            
+            # Load VOI mask
+            voi_mask = tio.LabelMap(voi_path)
+            subject_dict[f'voi_{ct_type}'] = voi_mask
+        
+        # Create TorchIO subject
+        subject = tio.Subject(subject_dict)
+        
+        # Apply transforms
+        transformed_subject = self.tio_transforms(subject)
+        
+        # Extract data
+        sample_data = {}
+        for ct_type in self.ct_types:
+            ct_tensor = transformed_subject[f'ct_{ct_type}'].data  # Shape: (1, D, H, W)
+            voi_tensor = transformed_subject[f'voi_{ct_type}'].data  # Shape: (1, D, H, W)
+            
+            # Apply VOI mask if requested
+            if self.apply_voi_mask:
+                ct_tensor = ct_tensor * (voi_tensor > 0)
+            
+            sample_data[ct_type] = ct_tensor.squeeze(0)  # Remove channel dimension: (D, H, W)
+        
         return sample_data
     
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.file_paths)
     
     def __getitem__(self, idx: int) -> Union[torch.Tensor, Tuple[torch.Tensor, int], Tuple[List[torch.Tensor], int]]:
-        """Get a sample from the dataset."""
-        row = self.data.iloc[idx]
-        name_id = row['serial_number']
-        pinyin = row['pinyin']
+        """Get a sample from the dataset using TorchIO."""
+        # Get patient info from the file paths dictionary
+        patient_ids = list(self.file_paths.keys())
+        name_id = patient_ids[idx]
+        
+        # Find corresponding row in data
+        row = self.data[self.data['serial_number'] == name_id]
+        if len(row) == 0:
+            raise ValueError(f"No data found for patient {name_id}")
+        
+        row = row.iloc[0]
         label = int(row['aggressive_pathology_1_indolent_2_aggressive']) - 1  # Convert to 0/1
         
         # Check cache first
         if self.cache_data and name_id in self.data_cache:
             sample_data = self.data_cache[name_id]
         else:
-            sample_data = self._load_and_preprocess_sample(name_id, pinyin)
+            sample_data = self._load_sample_with_tio(name_id)
             if self.cache_data:
                 self.data_cache[name_id] = sample_data
         
@@ -219,21 +264,15 @@ class TumorAggressivenessDataset(Dataset):
                 channels.append(sample_data[ct_type])
             
             # Stack as channels (C, D, H, W)
-            combined = np.stack(channels, axis=0)
-            tensor_data = torch.tensor(combined, dtype=torch.float32)
+            combined = torch.stack(channels, dim=0)
             
-            if self.transform:
-                tensor_data = self.transform(tensor_data)
-            
-            return tensor_data, label
+            return combined, label
         
         elif self.fusion_strategy == 'intermediate':
             # Return as list for custom fusion in model
             tensors = []
             for ct_type in self.ct_types:
-                tensor = torch.tensor(sample_data[ct_type], dtype=torch.float32).unsqueeze(0)  # (1, D, H, W)
-                if self.transform:
-                    tensor = self.transform(tensor)
+                tensor = sample_data[ct_type].unsqueeze(0)  # (1, D, H, W)
                 tensors.append(tensor)
             
             return tensors, label
@@ -241,10 +280,7 @@ class TumorAggressivenessDataset(Dataset):
         elif self.fusion_strategy == 'single':
             # Use only first CT type
             ct_type = self.ct_types[0]
-            tensor_data = torch.tensor(sample_data[ct_type], dtype=torch.float32).unsqueeze(0)  # (1, D, H, W)
-            
-            if self.transform:
-                tensor_data = self.transform(tensor_data)
+            tensor_data = sample_data[ct_type].unsqueeze(0)  # (1, D, H, W)
             
             return tensor_data, label
         
@@ -252,16 +288,21 @@ class TumorAggressivenessDataset(Dataset):
             # Return all sequences separately for ensemble training
             tensors = []
             for ct_type in self.ct_types:
-                tensor = torch.tensor(sample_data[ct_type], dtype=torch.float32).unsqueeze(0)  # (1, D, H, W)
-                if self.transform:
-                    tensor = self.transform(tensor)
+                tensor = sample_data[ct_type].unsqueeze(0)  # (1, D, H, W)
                 tensors.append(tensor)
             
             return tensors, label
     
     def get_sample_info(self, idx: int) -> Dict:
         """Get information about a sample without loading the data."""
-        row = self.data.iloc[idx]
+        patient_ids = list(self.file_paths.keys())
+        name_id = patient_ids[idx]
+        
+        row = self.data[self.data['serial_number'] == name_id]
+        if len(row) == 0:
+            raise ValueError(f"No data found for patient {name_id}")
+        
+        row = row.iloc[0]
         return {
             'name_id': row['serial_number'],
             'pinyin': row['pinyin'],
@@ -275,40 +316,40 @@ class TumorAggressivenessDataset(Dataset):
     
     def get_label_distribution(self) -> Dict:
         """Get distribution of labels in the dataset."""
-        labels = self.data['aggressive_pathology_1_indolent_2_aggressive'].values - 1
-        unique, counts = np.unique(labels, return_counts=True)
+        # Only count samples that have all required sequences
+        valid_labels = []
+        for name_id in self.file_paths.keys():
+            row = self.data[self.data['serial_number'] == name_id]
+            if len(row) > 0:
+                label = int(row.iloc[0]['aggressive_pathology_1_indolent_2_aggressive']) - 1
+                valid_labels.append(label)
+        
+        unique, counts = np.unique(valid_labels, return_counts=True)
         return dict(zip(unique, counts))
     
     def analyze_data_completeness(self) -> Dict:
         """Analyze the completeness of CT sequences across all patients."""
         completeness_stats = {
-            'total_patients': len(self.data),
+            'total_patients_in_csv': len(self.data),
+            'total_patients_with_all_sequences': len(self.file_paths),
             'sequence_availability': {ct: 0 for ct in self.ct_types},
-            'patients_with_all_sequences': 0,
+            'patients_with_all_sequences': len(self.file_paths),
             'patients_with_no_sequences': 0,
             'missing_sequences_by_patient': {}
         }
         
+        # Count sequence availability from file paths
+        for name_id, patient_paths in self.file_paths.items():
+            for ct_type in self.ct_types:
+                if ct_type in patient_paths:
+                    completeness_stats['sequence_availability'][ct_type] += 1
+        
+        # Count patients with no sequences
         for idx in range(len(self.data)):
             name_id = self.data.iloc[idx]['serial_number']
-            pinyin = self.data.iloc[idx]['pinyin']
-            patient_folder = f"{pinyin}_{name_id}"
-            available_sequences = []
-            
-            for ct_type in self.ct_types:
-                ct_path = os.path.join(self.ct_root, patient_folder, 'CT', f"{ct_type}_8")
-                if os.path.exists(ct_path):
-                    completeness_stats['sequence_availability'][ct_type] += 1
-                    available_sequences.append(ct_type)
-            
-            if len(available_sequences) == len(self.ct_types):
-                completeness_stats['patients_with_all_sequences'] += 1
-            elif len(available_sequences) == 0:
+            if name_id not in self.file_paths:
                 completeness_stats['patients_with_no_sequences'] += 1
                 completeness_stats['missing_sequences_by_patient'][name_id] = 'ALL'
-            else:
-                missing = [ct for ct in self.ct_types if ct not in available_sequences]
-                completeness_stats['missing_sequences_by_patient'][name_id] = missing
         
         return completeness_stats
 
@@ -407,76 +448,67 @@ class TumorAggressivenessDataLoader:
         )
 
 
-# # Example usage and testing
-# if __name__ == "__main__":
-#     # Test the dataset
-#     data_root = "Data"
+# Example usage and testing
+if __name__ == '__main__':
+    # Test the dataset
+    data_root = "Data"
     
-#     # Test different fusion strategies
-#     strategies = ['early', 'intermediate', 'single', 'ensemble']
+    # Test different fusion strategies
+    strategies = ['early', 'intermediate', 'single', 'ensemble']
     
-#     for strategy in strategies:
-#         print(f"\nTesting {strategy} fusion strategy:")
+    for strategy in strategies:
+        print(f"\nTesting {strategy} fusion strategy:")
         
-#         dataset = TumorAggressivenessDataset(
-#             csv_path=os.path.join(data_root, 'ccRCC_Survival_Analysis_Dataset_english', 'training_set_603_cases.csv'),
-#             ct_root=os.path.join(data_root, 'data_nifty', '1.Training_DICOM_603'),
-#             voi_root=os.path.join(data_root, 'ROI', '1.Training_DICOM_603'),
-#             ct_types=['A', 'D', 'N', 'V'],
-#             fusion_strategy=strategy,
-#             target_size=(64, 64, 64),  # Smaller size for testing
-#             verbose=True
-#         )
-        
-#         # Test first sample
-#         try:
-#             sample, label = dataset[0]
-#             sample_info = dataset.get_sample_info(0)
-            
-#             print(f"Sample info: {sample_info}")
-#             print(f"Label: {label}")
-            
-#             if strategy == 'early':
-#                 print(f"Sample shape: {sample.shape}")  # Should be (4, 64, 64, 64)
-#             elif strategy == 'intermediate':
-#                 print(f"Number of sequences: {len(sample)}")
-#                 print(f"Each sequence shape: {sample[0].shape}")  # Should be (1, 64, 64, 64)
-#             elif strategy == 'single':
-#                 print(f"Sample shape: {sample.shape}")  # Should be (1, 64, 64, 64)
-#             elif strategy == 'ensemble':
-#                 print(f"Number of sequences: {len(sample)}")
-#                 print(f"Each sequence shape: {sample[0].shape}")  # Should be (1, 64, 64, 64)
-                
-#         except Exception as e:
-#             print(f"Error testing {strategy}: {str(e)}")
-    
-#     # Test data loader
-#     print("\nTesting DataLoader:")
-#     loader = TumorAggressivenessDataLoader(
-#         data_root=data_root,
-#         batch_size=2,
-#         target_size=(64, 64, 64),
-#         fusion_strategy='early'
-#     )
-    
-#     train_loader = loader.create_train_loader()
-#     print(f"Train loader created with {len(train_loader)} batches")
-    
-#     # Test one batch
-#     try:
-#         for batch_idx, (data, labels) in enumerate(train_loader):
-#             print(f"Batch {batch_idx}: data shape {data.shape}, labels {labels}")
-#             break
-#     except Exception as e:
-#         print(f"Error testing data loader: {str(e)}") 
+        dataset = TumorAggressivenessDataset(
+            csv_path=os.path.join(data_root, 'ccRCC_Survival_Analysis_Dataset_english', 'training_set_603_cases.csv'),
+            ct_root=os.path.join(data_root, 'data_nifty', '1.Training_DICOM_603'),
+            voi_root=os.path.join(data_root, 'ROI', '1.Training_DICOM_603'),
+            ct_types=['A', 'D', 'N', 'V'],
+            fusion_strategy=strategy,
+            target_size=(64, 64, 64),  # Smaller size for testing
+            verbose=True
+        )
 
-# # Simple test: Load and print shape of a single CT file
-# if __name__ == "__main__":
-#     import nibabel as nib
-#     example_ct_path = r"Data\data_nifty\1.Training_DICOM_603\AI_JIU_GEN_P1548715\CT\A_8\A_8_02_shenAgioRoutine_20170728165801_6.nii.gz"
-#     if os.path.exists(example_ct_path):
-#         ct_img = nib.load(example_ct_path)
-#         ct_data = ct_img.get_fdata()
-#         print(f"Loaded CT shape: {ct_data.shape}")
-#     else:
-#         print(f"File not found: {example_ct_path}") 
+        print("length of dataset", len(dataset))
+        
+        # Test first sample
+        try:
+            sample, label = dataset[0]
+            sample_info = dataset.get_sample_info(0)
+            
+            print(f"Sample info: {sample_info}")
+            print(f"Label: {label}")
+            
+            if strategy == 'early':
+                print(f"Sample shape: {sample.shape}")  # Should be (4, 64, 64, 64)
+            elif strategy == 'intermediate':
+                print(f"Number of sequences: {len(sample)}")
+                print(f"Each sequence shape: {sample[0].shape}")  # Should be (1, 64, 64, 64)
+            elif strategy == 'single':
+                print(f"Sample shape: {sample.shape}")  # Should be (1, 64, 64, 64)
+            elif strategy == 'ensemble':
+                print(f"Number of sequences: {len(sample)}")
+                print(f"Each sequence shape: {sample[0].shape}")  # Should be (1, 64, 64, 64)
+                
+        except Exception as e:
+            print(f"Error testing {strategy}: {str(e)}")
+    
+    # Test data loader
+    print("\nTesting DataLoader:")
+    loader = TumorAggressivenessDataLoader(
+        data_root=data_root,
+        batch_size=2,
+        target_size=(64, 64, 64),
+        fusion_strategy='early'
+    )
+    
+    train_loader = loader.create_train_loader()
+    print(f"Train loader created with {len(train_loader)} batches")
+    
+    # Test one batch
+    try:
+        for batch_idx, (data, labels) in enumerate(train_loader):
+            print(f"Batch {batch_idx}: data shape {data.shape}, labels {labels}")
+            break
+    except Exception as e:
+        print(f"Error testing data loader: {str(e)}") 
