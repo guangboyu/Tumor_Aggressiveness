@@ -75,13 +75,21 @@ class IntermediateFusionResNet(nn.Module):
         }
         return configs.get(model_depth, (2, 2, 2, 2))
     
-    def forward(self, sequences: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, data_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Args:
-            sequences: List of tensors, each of shape (B, 1, D, H, W)
+            data_dict: Dictionary containing CT sequences and label
+                - 'A': tensor of shape (B, 1, D, H, W)
+                - 'D': tensor of shape (B, 1, D, H, W)
+                - 'N': tensor of shape (B, 1, D, H, W)
+                - 'V': tensor of shape (B, 1, D, H, W)
+                - 'label': tensor of shape (B,)
         Returns:
             logits: Output logits of shape (B, num_classes)
         """
+        # Extract CT sequences from dictionary
+        sequences = [data_dict[ct_type] for ct_type in ['A', 'D', 'N', 'V']]
+        
         # Process each sequence separately
         sequence_outputs = []
         for i, (sequence, backbone) in enumerate(zip(sequences, self.backbones)):
@@ -175,7 +183,21 @@ class CorrectedIntermediateFusionResNet(nn.Module):
         }
         return configs.get(model_depth, (2, 2, 2, 2))
 
-    def forward(self, sequences: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, data_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Args:
+            data_dict: Dictionary containing CT sequences and label
+                - 'A': tensor of shape (B, 1, D, H, W)
+                - 'D': tensor of shape (B, 1, D, H, W)
+                - 'N': tensor of shape (B, 1, D, H, W)
+                - 'V': tensor of shape (B, 1, D, H, W)
+                - 'label': tensor of shape (B,)
+        Returns:
+            logits: Output logits of shape (B, num_classes)
+        """
+        # Extract CT sequences from dictionary
+        sequences = [data_dict[ct_type] for ct_type in ['A', 'D', 'N', 'V']]
+        
         # 1. Get feature vectors from each sequence
         sequence_vectors = []
         for sequence, backbone in zip(sequences, self.backbones):
@@ -203,6 +225,61 @@ class CorrectedIntermediateFusionResNet(nn.Module):
         logits = self.classifier(fused)
         
         return logits
+
+
+class SingleSequenceResNet(nn.Module):
+    """
+    Single sequence ResNet model that uses only one CT sequence.
+    """
+    
+    def __init__(
+        self,
+        num_classes: int = 2,
+        spatial_dims: int = 3,
+        model_depth: int = 18,
+        dropout_rate: float = 0.5
+    ):
+        super().__init__()
+        
+        # Single ResNet backbone
+        self.backbone = resnet.ResNet(
+            spatial_dims=spatial_dims,
+            n_input_channels=1,
+            num_classes=num_classes,
+            block='basic' if model_depth <= 34 else 'bottleneck',
+            layers=self._get_layer_config(model_depth),
+            block_inplanes=[64, 128, 256, 512],
+            dropout_prob=dropout_rate
+        )
+        
+        logger.info(f"SingleSequenceResNet initialized")
+    
+    def _get_layer_config(self, model_depth: int) -> Tuple[int, int, int, int]:
+        """Get layer configuration based on model depth."""
+        configs = {
+            18: (2, 2, 2, 2),
+            34: (3, 4, 6, 3),
+            50: (3, 4, 6, 3),
+            101: (3, 4, 23, 3),
+            152: (3, 8, 36, 3)
+        }
+        return configs.get(model_depth, (2, 2, 2, 2))
+    
+    def forward(self, data_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Args:
+            data_dict: Dictionary containing CT sequences and label
+                - 'A': tensor of shape (B, 1, D, H, W)
+                - 'D': tensor of shape (B, 1, D, H, W)
+                - 'N': tensor of shape (B, 1, D, H, W)
+                - 'V': tensor of shape (B, 1, D, H, W)
+                - 'label': tensor of shape (B,)
+        Returns:
+            logits: Output logits of shape (B, num_classes)
+        """
+        # For single sequence, use the first available CT type
+        ct_type = ['A', 'D', 'N', 'V'][0]  # Default to 'A'
+        return self.backbone(data_dict[ct_type])
 
 
 class EnsembleResNet(nn.Module):
@@ -256,13 +333,21 @@ class EnsembleResNet(nn.Module):
         }
         return configs.get(model_depth, (2, 2, 2, 2))
     
-    def forward(self, sequences: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, data_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Args:
-            sequences: List of tensors, each of shape (B, 1, D, H, W)
+            data_dict: Dictionary containing CT sequences and label
+                - 'A': tensor of shape (B, 1, D, H, W)
+                - 'D': tensor of shape (B, 1, D, H, W)
+                - 'N': tensor of shape (B, 1, D, H, W)
+                - 'V': tensor of shape (B, 1, D, H, W)
+                - 'label': tensor of shape (B,)
         Returns:
             logits: Output logits of shape (B, num_classes)
         """
+        # Extract CT sequences from dictionary
+        sequences = [data_dict[ct_type] for ct_type in ['A', 'D', 'N', 'V']]
+        
         # Get predictions from each model
         predictions = []
         for sequence, model in zip(sequences, self.models):
@@ -323,6 +408,14 @@ class TumorClassificationModel(nn.Module):
                 dropout_rate=dropout_rate
             )
         
+        elif fusion_strategy == 'single':
+            self.model = SingleSequenceResNet(
+                num_classes=num_classes,
+                spatial_dims=spatial_dims,
+                model_depth=model_depth,
+                dropout_rate=dropout_rate
+            )
+        
         elif fusion_strategy == 'ensemble':
             self.model = EnsembleResNet(
                 num_sequences=num_sequences,
@@ -334,17 +427,21 @@ class TumorClassificationModel(nn.Module):
             )
         
         else:
-            raise ValueError(f"Unsupported fusion strategy: {fusion_strategy}. Use 'intermediate' or 'ensemble'")
+            raise ValueError(f"Unsupported fusion strategy: {fusion_strategy}. Use 'intermediate', 'single', or 'ensemble'")
         
         logger.info(f"TumorClassificationModel initialized with {fusion_strategy} fusion strategy")
     
     def forward(self, x):
         """
-        Forward pass that handles different input formats based on fusion strategy.
+        Forward pass that handles dictionary input from MONAI dataset.
         
         Args:
-            x: Input data format depends on fusion strategy:
-                - 'intermediate'/'ensemble': List of (B, 1, D, H, W) tensors
+            x: Dictionary containing CT sequences and label
+                - 'A': tensor of shape (B, 1, D, H, W)
+                - 'D': tensor of shape (B, 1, D, H, W)
+                - 'N': tensor of shape (B, 1, D, H, W)
+                - 'V': tensor of shape (B, 1, D, H, W)
+                - 'label': tensor of shape (B,)
         """
         return self.model(x)
     
@@ -368,6 +465,26 @@ if __name__ == "__main__":
     spatial_dims = 3
     target_size = (64, 64, 64)
     
+    # Test Single Sequence
+    print("\nTesting Single Sequence Model:")
+    single_model = TumorClassificationModel(
+        fusion_strategy='single',
+        num_sequences=1,
+        num_classes=2,
+        model_depth=18
+    )
+    
+    # Create dictionary input for single sequence
+    single_input = {
+        'image': torch.randn(batch_size, 1, *target_size),
+        'label': torch.randint(0, 2, (batch_size,))
+    }
+    single_output = single_model(single_input)
+    print(f"Single sequence input: dictionary with keys {list(single_input.keys())}")
+    print(f"Image shape: {single_input['image'].shape}")
+    print(f"Single sequence output shape: {single_output.shape}")
+    print(f"Model info: {single_model.get_model_info()}")
+    
     # Test Intermediate Fusion
     print("\nTesting Intermediate Fusion Model:")
     intermediate_model = TumorClassificationModel(
@@ -378,9 +495,17 @@ if __name__ == "__main__":
         fusion_method='attention'
     )
     
-    intermediate_input = [torch.randn(batch_size, 1, *target_size) for _ in range(4)]  # List of (B, 1, D, H, W)
+    # Create dictionary input
+    intermediate_input = {
+        'A': torch.randn(batch_size, 1, *target_size),
+        'D': torch.randn(batch_size, 1, *target_size),
+        'N': torch.randn(batch_size, 1, *target_size),
+        'V': torch.randn(batch_size, 1, *target_size),
+        'label': torch.randint(0, 2, (batch_size,))
+    }
     intermediate_output = intermediate_model(intermediate_input)
-    print(f"Intermediate fusion input: {len(intermediate_input)} sequences of shape {intermediate_input[0].shape}")
+    print(f"Intermediate fusion input: dictionary with keys {list(intermediate_input.keys())}")
+    print(f"Each sequence shape: {intermediate_input['A'].shape}")
     print(f"Intermediate fusion output shape: {intermediate_output.shape}")
     print(f"Model info: {intermediate_model.get_model_info()}")
     
@@ -394,8 +519,16 @@ if __name__ == "__main__":
         ensemble_method='weighted_voting'
     )
     
-    ensemble_input = [torch.randn(batch_size, 1, *target_size) for _ in range(4)]  # List of (B, 1, D, H, W)
+    # Create dictionary input
+    ensemble_input = {
+        'A': torch.randn(batch_size, 1, *target_size),
+        'D': torch.randn(batch_size, 1, *target_size),
+        'N': torch.randn(batch_size, 1, *target_size),
+        'V': torch.randn(batch_size, 1, *target_size),
+        'label': torch.randint(0, 2, (batch_size,))
+    }
     ensemble_output = ensemble_model(ensemble_input)
-    print(f"Ensemble input: {len(ensemble_input)} sequences of shape {ensemble_input[0].shape}")
+    print(f"Ensemble input: dictionary with keys {list(ensemble_input.keys())}")
+    print(f"Each sequence shape: {ensemble_input['A'].shape}")
     print(f"Ensemble output shape: {ensemble_output.shape}")
     print(f"Model info: {ensemble_model.get_model_info()}") 

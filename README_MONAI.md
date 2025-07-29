@@ -45,8 +45,7 @@ dataset = MONAITumorDataset(
     fusion_strategy='intermediate',
     target_size=(128, 128, 128),
     normalize=True,
-    apply_voi_mask=True,
-    cache_rate=0.1,  # Cache 10% of data in memory
+    apply_voi_mask=True,  # Apply VOI masking
     verbose=True
 )
 
@@ -120,30 +119,18 @@ dataset = MONAITumorDataset(
 
 ## MONAI Transforms
 
-The dataset automatically applies the following MONAI transforms:
+The dataset applies simple, essential transforms:
 
-1. **LoadImaged**: Load medical images
-2. **AddChanneld**: Add channel dimension
+1. **LoadImaged**: Load medical images and VOI masks
+2. **EnsureChannelFirstd**: Ensure channel dimension is first
 3. **Orientationd**: Standardize orientation to RAS
-4. **Spacingd**: Resample to uniform spacing
-5. **ScaleIntensityRanged**: Clip HU values to [-1000, 1000]
-6. **NormalizeIntensityd**: Z-score normalization
-7. **MaskIntensityd**: Apply VOI mask (if enabled)
-8. **CropForegroundd**: Crop to foreground
-9. **SpatialPadd**: Pad to target size
-10. **Resized**: Resize to target dimensions
-11. **ToTensord**: Convert to PyTorch tensors
+4. **Spacingd**: Resample to uniform spacing (1mm isotropic)
+5. **ScaleIntensityRanged**: Clip HU values to [-1000, 1000] and normalize to [0, 1]
+6. **MaskIntensityd**: Apply VOI mask to CT images (if enabled)
+7. **Resized**: Resize to target dimensions
+8. **ToTensord**: Convert to PyTorch tensors
 
 ## Performance Optimization
-
-### Caching
-```python
-# Cache 20% of data in memory for faster access
-dataset = MONAITumorDataset(
-    json_path="Data/training_manifest.json",
-    cache_rate=0.2
-)
-```
 
 ### Multi-worker Loading
 ```python
@@ -154,9 +141,6 @@ loader = MONAITumorDataLoader(
     batch_size=4
 )
 ```
-
-### Preprocessed VOI Masks
-The system uses preprocessed VOI masks from `Data/VOI_nifty/` to avoid real-time resampling during training.
 
 ## Testing
 
