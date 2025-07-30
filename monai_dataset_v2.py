@@ -5,6 +5,7 @@ import os
 from typing import List, Tuple, Dict, Any
 
 from torch.utils.data import Dataset
+from monai.data import CacheDataset, DataLoader, SmartCacheDataset
 from monai.transforms import (
     Compose,
     LoadImaged,
@@ -178,6 +179,7 @@ class MONAITumorDataLoader:
             **self.dataset_params
         )
         print(f"{json_path} dataset length: ", len(dataset))
+        print(f"Label distribution: {dataset.get_label_distribution()}")
         
         return torch.utils.data.DataLoader(
             dataset,
@@ -198,59 +200,68 @@ class MONAITumorDataLoader:
     def get_test_loader(self) -> torch.utils.data.DataLoader:
         """Creates the external test data loader."""
         return self._create_loader("external_test_manifest.json", is_train=False)
-
-
-# # --- UPDATED TEST SCRIPT ---
-# if __name__ == '__main__':
-#     # This block now uses the revised MONAITumorDataset and the refactored DataLoader
-#     # Note: This test requires the revised MONAITumorDataset class to be defined in the same file
-#     # or imported correctly. It will fail if dummy paths don't exist.
-
-#     data_root = "Data" 
-#     print("\n--- Testing MONAI DataLoader Factory ---")
     
-#     # Instantiate the refactored loader factory
-#     loader_factory = MONAITumorDataLoader(
-#         data_root=data_root,
-#         batch_size=16, # Use batch size of 1 for simple testing
-#         target_size=(64, 64, 64),
-#         ct_types=['A', 'D', 'N', 'V'],
-#         apply_voi_mask=True # Example of passing a dataset_kwarg
-#     )
-#     print(len)
-    
-#     try:
-#         # Get the training loader
-#         train_loader = loader_factory.get_train_loader()
-#         print(f"Train loader created successfully.")
-#         # Test one batch
-#         for batch_idx, batch_dict in enumerate(train_loader):
-#             print(f"Batch {batch_idx}:")
-#             print(f"  - Keys: {list(batch_dict.keys())}")
-#             print(f"  - Labels: {batch_dict['label']}")
-#             print(f"  - Number of sequences: {len([k for k in batch_dict.keys() if k in ['A', 'D', 'N', 'V']])}")
-#             print(f"  - Each sequence shape: {batch_dict['A'].shape}")
-#             print(f"  - Label distribution: {batch_dict['label'].bincount()}")
-#             break
+class CacheMONAITumorDataLoader:
+    """
+    A data loader factory that creates data loaders for training and validation,
+    with built-in support for caching the training set.
+    """
+    def __init__(
+        self,
+        data_root: str,
+        batch_size: int = 4,
+        num_workers: int = 4,
+        cache_rate: float = 0.0, # Added cache_rate
+        **dataset_kwargs
+    ):
+        self.data_root = data_root
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.cache_rate = cache_rate
+        self.dataset_params = dataset_kwargs
 
-#     except Exception as e:
-#         logger.error(f"\nCould not run example. This is expected if dummy file paths do not exist.")
-#         logger.error(f"Error: {e}")
+    def get_train_loader(self) -> DataLoader:
+        """Creates the training data loader with optional caching."""
+        json_path = os.path.join(self.data_root, "training_manifest.json")
+        
+        # Create the base dataset instance
+        train_ds = MONAITumorDataset(
+            json_path=json_path,
+            is_train=True,
+            **self.dataset_params
+        )
+        
+        # Wrap with CacheDataset if a cache rate is specified
+        if self.cache_rate > 0.0:
+            logger.info(f"Using CacheDataset for training with cache_rate={self.cache_rate}. The first epoch will be slow.")
+            train_ds = CacheDataset(
+                data=train_ds,
+                cache_rate=self.cache_rate,
+                num_workers=self.num_workers
+            )
 
-#     try:
-#         # Get the validation loader
-#         val_loader = loader_factory.get_val_loader()
-#         print(f"Validation loader created successfully.")
-#         # Test one batch
-#         for batch_idx, batch_dict in enumerate(val_loader):
-#             print(f"Batch {batch_idx}:")
-#             print(f"  - Keys: {list(batch_dict.keys())}")
-#             print(f"  - Labels: {batch_dict['label']}")
-#             print(f"  - Number of sequences: {len([k for k in batch_dict.keys() if k in ['A', 'D', 'N', 'V']])}")
-#             print(f"  - Each sequence shape: {batch_dict['A'].shape}")
-#             print(f"  - Label distribution: {batch_dict['label'].bincount()}")
-#             break
+        return DataLoader(
+            train_ds,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=torch.cuda.is_available()
+        )
 
-#     except Exception as e:
-#         logger.error(f"\nCould not run example. This is expected if dummy file paths do not exist.")
-#         logger.error(f"Error: {e}")
+    def get_val_loader(self) -> DataLoader:
+        """Creates the validation data loader (no caching)."""
+        json_path = os.path.join(self.data_root, "internal_test_manifest.json")
+        
+        val_ds = MONAITumorDataset(
+            json_path=json_path,
+            is_train=False,
+            **self.dataset_params
+        )
+        
+        return DataLoader(
+            val_ds,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=torch.cuda.is_available()
+        )

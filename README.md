@@ -1,148 +1,63 @@
-# Tumor Aggressiveness Classification
+3D Kidney Cancer Aggressiveness ClassificationThis project provides a complete pipeline for training and evaluating 3D deep learning models to classify the aggressiveness of kidney cancer from multi-sequence CT scans. It uses the MONAI framework and supports various fusion strategies for combining information from different CT phases.FeaturesMulti-Sequence Fusion: Supports combining multiple CT sequences (e.g., Arterial, Venous, etc.) using:Concatenation: A simple and robust feature fusion method.Cross-Attention: A more advanced method to weigh the importance of each sequence.Pre-trained Models: Easily leverages powerful 3D models (ResNet) pre-trained on large-scale medical datasets (MedicalNet) to boost performance.Efficient Data Loading: Uses SmartCacheDataset to accelerate training by caching pre-processed data, solving common I/O bottlenecks.Modular Codebase: Clean separation of concerns with dedicated files for the dataset (dataset.py), model (model.py), and training loop (train.py).Comprehensive Evaluation: Calculates and logs key metrics including AUC, accuracy, F1-score, precision, and recall using TensorBoard.Setup and Installation1. Clone the Repositorygit clone <your-repository-url>
+cd <your-repository-name>
+2. Create a Conda EnvironmentIt is highly recommended to use a Conda environment to manage dependencies.conda create -n kidney_cancer python=3.10 -y
+conda activate kidney_cancer
+3. Install DependenciesThis project requires PyTorch with CUDA support, MONAI, and several other packages.# Install PyTorch with CUDA support (adjust for your CUDA version)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-A deep learning project for classifying tumor aggressiveness using multi-sequence CT scans and VOI (Volume of Interest) segmentation masks.
-
-## Project Overview
-
-This project implements various fusion strategies for multi-sequence CT data (A, D, N, V sequences) to classify tumor aggressiveness. The system supports early fusion, intermediate fusion, and ensemble approaches using 3D ResNet architectures.
-
-## Features
-
-- **Multiple Fusion Strategies**: Early fusion, intermediate fusion, single sequence, and ensemble methods
-- **Flexible Data Loading**: Supports NIfTI and NRRD formats with automatic orientation handling
-- **3D ResNet Models**: Based on MONAI's 3D ResNet implementations
-- **Comprehensive Training Pipeline**: Includes validation, testing, and model checkpointing
-- **Medical Image Preprocessing**: VOI masking, normalization, and resampling
-
-## Installation
-
-1. **Clone the repository**:
-```bash
-git clone <repository-url>
-cd tumor-aggressiveness-classification
-```
-
-2. **Create a virtual environment** (recommended):
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. **Install dependencies**:
-```bash
-pip install -r requirements.txt
-```
-
-## Data Structure
-
-The project expects the following data structure:
-```
-Data/
-├── ccRCC_Survival_Analysis_Dataset_english/
-│   ├── training_set_603_cases.csv
-│   ├── internal_test_set_259_cases.csv
-│   └── external_verification_set_308_cases.csv
-├── data_nifty/
-│   ├── 1.Training_DICOM_603/
-│   ├── 2.Internal Test_DICOM_259/
-│   └── 3.External Test_DICOM_308/
-└── ROI/
-    ├── 1.Training_ROI_603/
-    ├── 2.Internal Test_ROI_259/
-    └── 3.External Test_ROI_308/
-```
-
-## Usage
-
-### Training
-
-Train a model with intermediate fusion and attention mechanism:
-```bash
-python train.py --fusion_strategy intermediate --fusion_method attention --batch_size 8 --epochs 50 --lr 1e-4
-```
-
-### Available Options
-
-- `--fusion_strategy`: `early`, `intermediate`, `single`, `ensemble`
-- `--fusion_method`: `concat`, `attention`, `weighted_sum` (for intermediate fusion)
-- `--ct_types`: List of CT sequences to use (default: `A D N V`)
-- `--batch_size`: Batch size for training (default: 4)
-- `--epochs`: Number of training epochs (default: 100)
-- `--lr`: Learning rate (default: 1e-4)
-- `--target_size`: Target volume size (default: 128 128 128)
-
-### Testing VOI Alignment
-
-Check if CT and VOI files are properly aligned:
-```bash
-python z_test.py
-```
-
-## Model Architectures
-
-### Early Fusion
-- Concatenates all CT sequences as channels
-- Input: `(B, 4, D, H, W)` where 4 = number of CT sequences
-- Single 3D ResNet processes the concatenated input
-
-### Intermediate Fusion
-- Processes each CT sequence separately with individual ResNet backbones
-- Fuses features using attention, concatenation, or weighted sum
-- Supports different fusion methods for optimal performance
-
-### Ensemble
-- Trains separate models for each CT sequence
-- Combines predictions using voting, weighted voting, or stacking
-
-## Project Structure
-
-```
-├── dataset.py          # Dataset and DataLoader classes
-├── model.py            # Model architectures and fusion strategies
-├── train.py            # Training script
-├── z_test.py           # VOI alignment testing
-├── requirements.txt    # Python dependencies
-├── .gitignore         # Git ignore file
-└── README.md          # This file
-```
-
-## Performance Metrics
-
-The training pipeline tracks:
-- Accuracy
-- Precision, Recall, F1-score
-- AUC-ROC
-- Loss curves
-
-Results are saved in the `outputs/` directory with TensorBoard logs for visualization.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@article{tumor_aggressiveness_2024,
-  title={Tumor Aggressiveness Classification using Multi-Sequence CT Scans},
-  author={Your Name},
-  journal={Journal Name},
-  year={2024}
-}
-```
-
-## Acknowledgments
-
-- MONAI for medical imaging deep learning tools
-- 3D Slicer for medical image visualization
-- PyTorch for deep learning framework
+# Install MONAI and other required packages
+pip install monai scikit-learn tqdm tensorboard x-transformers
+Data PreparationThe model expects the data to be organized in a specific structure and referenced by JSON manifest files.1. Directory StructureOrganize your data files as follows:<project_root>/
+├── Data/
+│   ├── data_nifty/
+│   │   └── 1.Training_DICOM_603/
+│   │       └── PATIENT_ID/
+│   │           └── CT/
+│   │               ├── A_8/
+│   │               │   └── ...nii.gz
+│   │               └── V_8/
+│   │                   └── ...nii.gz
+│   ├── VOI_nifty/
+│   │   └── 1.Training_VOI_603/
+│   │       └── PATIENT_ID/
+│   │           └── VOI/
+│   │               └── A.nii.gz
+│   ├── training_manifest.json
+│   └── internal_test_manifest.json
+├── pre_trained/
+│   └── tencent_pretrain/
+│       └── resnet_18_23dataset.pth
+├── dataset.py
+├── model.py
+└── train.py
+2. JSON Manifest FilesCreate training_manifest.json and internal_test_manifest.json inside the Data/ directory. Each file should be a list of JSON objects, where each object represents one patient and contains file paths to their data.Example entry in training_manifest.json:[
+  {
+    "label": 0,
+    "patient_id": "P2121787",
+    "A": "Data/data_nifty/1.Training_DICOM_603/AO_XIAO_MAO_P2121787/CT/A_8/A_8_01_ThoraxRoutine_20191010092049_10.nii.gz",
+    "V": "Data/data_nifty/1.Training_DICOM_603/AO_XIAO_MAO_P2121787/CT/V_8/V_8_01_ThoraxRoutine_20191010092049_12.nii.gz",
+    "mask": "Data/VOI_nifty/1.Training_VOI_603/AO_XIAO_MAO_P2121787/VOI/A.nii.gz"
+  }
+]
+How to RunTrainingThe train.py script is the main entry point for training the model. You can configure experiments using command-line arguments.Example 1: Train a pre-trained ResNet-18 with concat fusionThis command uses the Arterial ('A') and Venous ('V') phases, applies the VOI mask, and saves the output to a new experiment directory.python train.py \
+    --ct_types A V \
+    --model_depth 18 \
+    --fusion_method concat \
+    --apply_voi_mask \
+    --batch_size 4 \
+    --lr 1e-4 \
+    --epochs 100 \
+    --pretrained \
+    --local_pretrained_path "pre_trained/tencent_pretrain/resnet_18_23dataset.pth"
+Example 2: Train a ResNet-34 with attention fusionThis command trains a deeper model using the more complex attention-based fusion.python train.py \
+    --ct_types A D N V \
+    --model_depth 34 \
+    --fusion_method attention \
+    --apply_voi_mask \
+    --batch_size 2 \
+    --lr 1e-5 \
+    --epochs 150 \
+    --pretrained \
+    --local_pretrained_path "pre_trained/tencent_pretrain/resnet_34_23dataset.pth"
+MonitoringYou can monitor the training progress, including loss and metrics curves, using TensorBoard:tensorboard --logdir=outputs
+File Structuretrain.py: The main script for running the training and validation loops. It handles argument parsing, model initialization, and experiment management.dataset.py: Contains the MONAITumorDataset and MONAITumorDataLoader classes, which manage data loading, transformations, and caching.model.py: Defines the MultiSequenceResNet architecture, including the fusion logic for concat and attention.test_model.py / test_dataset.py: Utility scripts for verifying that the model and data loaders are working correctly.
