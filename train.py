@@ -42,21 +42,20 @@ class Trainer:
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Setup output directory and TensorBoard
         self._setup_output_dir()
         self.writer = SummaryWriter(log_dir=os.path.join(self.output_dir, 'tensorboard'))
 
-        # Initialize model, optimizer, and criterion
         self.model = self._init_model()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='max', factor=0.5, patience=10, verbose=True)
-        weights = torch.tensor([460/561.0, 101.0/561.0], device=self.device)
+        
+        # Correctly inverted weights for class imbalance
+        weights = torch.tensor([101.0/561.0, 460.0/561.0], device=self.device)
         self.criterion = nn.CrossEntropyLoss(weight=weights)
 
         # Load data
         self.train_loader, self.val_loader = self._init_dataloaders()
         
-        # Checkpoint and early stopping attributes
         self.start_epoch = 0
         self.best_auc = 0.0
         self.patience_counter = 0
@@ -70,7 +69,6 @@ class Trainer:
         self.output_dir = os.path.join(self.config.output_dir, self.config.experiment_name)
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # Save configuration
         with open(os.path.join(self.output_dir, 'config.json'), 'w') as f:
             json.dump(vars(self.config), f, indent=2)
 
@@ -82,22 +80,28 @@ class Trainer:
             model_depth=self.config.model_depth,
             fusion_method=self.config.fusion_method,
             dropout_rate=self.config.dropout_rate,
-            pretrained=Config.pretrained,
-            pretrained_path=Config.local_pretrained_path
+            pretrained=self.config.pretrained,
+            pretrained_path=self.config.local_pretrained_path
         ).to(self.device)
         logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters.")
         return model
 
     def _init_dataloaders(self):
         """Initializes the training and validation data loaders."""
-        loader_factory = MONAITumorDataLoader(
-            data_root=self.config.data_root,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            target_size=tuple(self.config.target_size),
-            ct_types=self.config.ct_types,
-            apply_voi_mask=self.config.apply_voi_mask
-        )
+        # Create a dictionary of arguments for the DataLoader factory.
+        # This is a clean and robust way to manage parameters.
+        loader_params = {
+            "data_root": self.config.data_root,
+            "batch_size": self.config.batch_size,
+            "num_workers": self.config.num_workers,
+            "replace_rate": 1.0,
+            # Pass dataset-specific args
+            "ct_types": self.config.ct_types,
+            "target_size": tuple(self.config.target_size),
+            "apply_voi_mask": self.config.apply_voi_mask
+        }
+        
+        loader_factory = MONAITumorDataLoader(**loader_params)
         return loader_factory.get_train_loader(), loader_factory.get_val_loader()
 
     def _run_epoch(self, epoch, is_train):
@@ -111,7 +115,6 @@ class Trainer:
 
         pbar = tqdm(loader, desc=f"{phase} Epoch {epoch+1}/{self.config.epochs}")
         for batch_data in pbar:
-            # Move all tensor data in the batch dictionary to the device
             inputs = {k: v.to(self.device) for k, v in batch_data.items() if isinstance(v, torch.Tensor)}
             labels = inputs.pop('label')
 
@@ -124,7 +127,6 @@ class Trainer:
                     loss.backward()
                     self.optimizer.step()
 
-            # Collect results for metrics calculation
             probs = torch.softmax(outputs, dim=1)[:, 1].detach().cpu().numpy()
             preds = np.argmax(outputs.detach().cpu().numpy(), axis=1)
             
@@ -139,13 +141,16 @@ class Trainer:
 
     def _calculate_metrics(self, y_true, y_pred, y_prob, avg_loss):
         """Calculates and returns a dictionary of metrics."""
+        pred_counts = np.bincount(y_pred, minlength=2)
+        
         return {
             'loss': avg_loss,
             'accuracy': accuracy_score(y_true, y_pred),
             'precision': precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=0)[0],
             'recall': precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=0)[1],
             'f1': precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=0)[2],
-            'auc': roc_auc_score(y_true, y_prob)
+            'auc': roc_auc_score(y_true, y_prob),
+            'pred_counts': pred_counts
         }
 
     def train(self):
@@ -155,13 +160,9 @@ class Trainer:
             train_metrics = self._run_epoch(epoch, is_train=True)
             val_metrics = self._run_epoch(epoch, is_train=False)
 
-            # Log to console and TensorBoard
             self._log_metrics(epoch, train_metrics, val_metrics)
-            
-            # Update learning rate scheduler
             self.scheduler.step(val_metrics['auc'])
 
-            # Checkpoint saving and early stopping
             if self._check_for_improvement(epoch, val_metrics):
                 break
         
@@ -171,12 +172,17 @@ class Trainer:
     def _log_metrics(self, epoch, train_metrics, val_metrics):
         """Logs metrics to console and TensorBoard."""
         logger.info(f"Train - Loss: {train_metrics['loss']:.4f}, AUC: {train_metrics['auc']:.4f}, Acc: {train_metrics['accuracy']:.4f}")
-        logger.info(f"Val   - Loss: {val_metrics['loss']:.4f}, AUC: {val_metrics['auc']:.4f}, Acc: {val_metrics['accuracy']:.4f}")
+        
+        val_pred_counts = val_metrics['pred_counts']
+        val_pred_dist_str = f"Pred Dist [0, 1]: [{val_pred_counts[0]}, {val_pred_counts[1]}]"
+        logger.info(f"Val   - Loss: {val_metrics['loss']:.4f}, AUC: {val_metrics['auc']:.4f}, Acc: {val_metrics['accuracy']:.4f} | {val_pred_dist_str}")
         
         for metric, value in train_metrics.items():
-            self.writer.add_scalar(f'train/{metric}', value, epoch)
+            if metric != 'pred_counts':
+                self.writer.add_scalar(f'train/{metric}', value, epoch)
         for metric, value in val_metrics.items():
-            self.writer.add_scalar(f'val/{metric}', value, epoch)
+            if metric != 'pred_counts':
+                self.writer.add_scalar(f'val/{metric}', value, epoch)
         self.writer.add_scalar('train/learning_rate', self.optimizer.param_groups[0]['lr'], epoch)
 
     def _check_for_improvement(self, epoch, val_metrics):
@@ -191,7 +197,7 @@ class Trainer:
         
         if self.patience_counter >= self.config.patience:
             logger.info(f"Early stopping after {self.config.patience} epochs without improvement.")
-            return True # Signal to stop training
+            return True
         return False
 
     def _save_checkpoint(self, epoch, filename):
@@ -233,6 +239,12 @@ def main():
     parser.add_argument('--dropout_rate', type=float, default=0.5, help='Dropout rate in the classifier')
     parser.add_argument('--patience', type=int, default=20, help='Patience for early stopping')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+
+    # Arguments for pre-trained weights
+    parser.add_argument('--pretrained', action='store_true', help='Use pre-trained weights from MedicalNet')
+    parser.add_argument('--local_pretrained_path', type=str, 
+                        default='pre_trained/tencent_pretrain/resnet_18_23dataset.pth', 
+                        help='Path to local pre-trained weights file')
 
     args = parser.parse_args()
     

@@ -13,17 +13,45 @@ from monai.transforms import (
     Orientationd,
     Spacingd,
     ScaleIntensityRanged,
+    ScaleIntensity,
     MaskIntensityd,
     CropForegroundd,
     ResizeWithPadOrCropd,
     RandFlipd,
     RandRotate90d,
     ToTensord,
+    MapTransform,
 )
 
 # --- Setup ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class SelectLargestMaskSlice(MapTransform):
+    """
+    A MONAI transform to select the 2D slice with the largest mask area from a 3D volume.
+    This is applied to all image keys in the dictionary.
+    """
+    def __init__(self, keys: List[str], mask_key: str):
+        super().__init__(keys)
+        self.mask_key = mask_key
+
+    def __call__(self, data):
+        d = dict(data)
+        mask = d[self.mask_key]
+        
+        # Sum the mask over the height and width to find the slice with the most pixels
+        # Assuming shape is (C, H, W, D)
+        slice_sums = torch.sum(mask, dim=(1, 2))
+        largest_slice_idx = torch.argmax(slice_sums)
+        
+        # Select this slice for all specified keys
+        for key in self.keys:
+            if key in d:
+                # Squeeze the channel dimension for 2D processing
+                d[key] = d[key][:, :, :, largest_slice_idx].squeeze(0)
+        return d
 
 
 class MONAITumorDataset(Dataset):
@@ -57,12 +85,14 @@ class MONAITumorDataLoader:
         batch_size: int = 4,
         num_workers: int = 4,
         replace_rate: float = 1.0, # Use replace_rate for older MONAI versions
+        use_2d_slices: bool = False,
         **dataset_kwargs
     ):
         self.data_root = data_root
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.replace_rate = replace_rate
+        self.use_2d_slices = use_2d_slices
         self.dataset_params = dataset_kwargs
 
     def _get_transforms(self, is_train: bool):
@@ -99,9 +129,9 @@ class MONAITumorDataLoader:
             # Add random augmentations for training
             transforms.extend([
                 ResizeWithPadOrCropd(keys=all_keys, spatial_size=target_size, method="symmetric"),
-                RandFlipd(keys=all_keys, prob=0.5, spatial_axis=0),
-                RandFlipd(keys=all_keys, prob=0.5, spatial_axis=1),
-                RandRotate90d(keys=all_keys, prob=0.5, max_k=3, spatial_axes=(0, 1)),
+                # RandFlipd(keys=all_keys, prob=0.5, spatial_axis=0),
+                # RandFlipd(keys=all_keys, prob=0.5, spatial_axis=1),
+                # RandRotate90d(keys=all_keys, prob=0.5, max_k=3, spatial_axes=(0, 1)),
             ])
         else:
             # For validation, just resize

@@ -78,7 +78,7 @@ class MONAITumorDataset(Dataset):
         """Create MONAI transforms with proper handling for different data types."""
         # Separate keys for different data types
         image_keys = self.ct_types.copy()
-        mask_keys = ['mask'] if self.apply_voi_mask else []
+        mask_keys = [f"{ct_type}_mask" for ct_type in self.ct_types] if self.apply_voi_mask else []
         all_keys = image_keys + mask_keys
         
         transforms = [
@@ -106,11 +106,13 @@ class MONAITumorDataset(Dataset):
                 )
             )
         
-        # Add VOI masking if requested
+        # Add VOI masking if requested - apply each mask to its corresponding CT
+        # Note: This will work with both .nii.gz and .nrrd mask files
         if self.apply_voi_mask and image_keys:
-            transforms.append(
-                MaskIntensityd(keys=image_keys, mask_key="mask")
-            )
+            for ct_type in self.ct_types:
+                transforms.append(
+                    MaskIntensityd(keys=[ct_type], mask_key=f"{ct_type}_mask")
+                )
         
         # Add foreground cropping to remove empty space
         if image_keys:

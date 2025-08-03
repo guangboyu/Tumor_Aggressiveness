@@ -71,6 +71,18 @@ class VOIPreprocessor:
     
     def _find_voi_file(self, patient_folder: str, ct_type: str, voi_root: str) -> str:
         """Find the VOI file for a given patient and sequence type."""
+        # For JSON generation, prioritize VOI_nifty (preprocessed VOI files)
+        voi_nifty_path = os.path.join(self.data_root, "VOI_nifty", voi_root, patient_folder, 'VOI')
+        
+        if os.path.exists(voi_nifty_path):
+            # Look for preprocessed .nii.gz files
+            voi_files = [f for f in os.listdir(voi_nifty_path) 
+                        if f == f"{ct_type}.nii.gz"]
+            
+            if voi_files:
+                return os.path.join(voi_nifty_path, voi_files[0])
+        
+        # If not found in VOI_nifty, try original ROI folder (for preprocessing step)
         voi_path = os.path.join(self.data_root, voi_root, patient_folder, 'ROI')
         
         if not os.path.exists(voi_path):
@@ -120,7 +132,7 @@ class VOIPreprocessor:
                 output_dir = os.path.join(self.voi_nifty_root, output_root, patient_folder, 'VOI')
                 os.makedirs(output_dir, exist_ok=True)
                 
-                # Save resampled VOI as NIfTI
+                # Save resampled VOI as NIfTI with CT type suffix
                 output_file = os.path.join(output_dir, f"{ct_type}.nii.gz")
                 sitk.WriteImage(voi_resampled, output_file)
                 
@@ -236,17 +248,18 @@ class VOIPreprocessor:
         
         for idx, row in df.iterrows():
             patient_folder = f"{row['pinyin']}_{row['serial_number']}"
-            output_dir = os.path.join(self.voi_nifty_root, config['output_root'], patient_folder, 'VOI')
             
             patient_verified = True
             for ct_type in ct_types:
-                expected_file = os.path.join(output_dir, f"{ct_type}.nii.gz")
+                # Check preprocessed VOI files in VOI_nifty
+                voi_nifty_file = os.path.join(self.data_root, "VOI_nifty", config['output_root'], 
+                                            patient_folder, 'VOI', f"{ct_type}.nii.gz")
                 
-                if os.path.exists(expected_file):
+                if os.path.exists(voi_nifty_file):
                     verification_stats['verified_sequences'] += 1
                 else:
                     verification_stats['missing_sequences'] += 1
-                    verification_stats['missing_files'].append(expected_file)
+                    verification_stats['missing_files'].append(f"Missing {ct_type} mask for {patient_folder}: {voi_nifty_file}")
                     patient_verified = False
             
             if patient_verified:
@@ -298,10 +311,17 @@ class VOIPreprocessor:
                     ct_file = self._find_ct_file(patient_folder, ct_type, config['ct_root'])
                     item[ct_type] = ct_file
                 
-                # Add mask file path (using preprocessed VOI)
-                mask_file = os.path.join(self.voi_nifty_root, config['output_root'], 
-                                       patient_folder, 'VOI', f"{ct_types[0]}.nii.gz")
-                item['mask'] = mask_file
+                # Add mask file paths for each CT type (using preprocessed VOI from VOI_nifty)
+                for ct_type in ct_types:
+                    # Look for preprocessed VOI files in VOI_nifty
+                    voi_nifty_mask = os.path.join(self.data_root, "VOI_nifty", config['output_root'], 
+                                                patient_folder, 'VOI', f"{ct_type}.nii.gz")
+                    
+                    if os.path.exists(voi_nifty_mask):
+                        item[f"{ct_type}_mask"] = voi_nifty_mask
+                    else:
+                        # If preprocessed VOI doesn't exist, skip this patient
+                        raise FileNotFoundError(f"No preprocessed VOI file found for {ct_type} in {patient_folder}: {voi_nifty_mask}")
                 
                 # Verify all files exist
                 all_files_exist = True
