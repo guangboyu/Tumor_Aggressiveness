@@ -88,20 +88,28 @@ class MultiSequenceResNet(nn.Module):
         # 2. Define the fusion and classification layers.
         block_expansion = 1 if model_depth <= 34 else 4
         num_features_per_seq = 512 * block_expansion
+        f_dim = 512
 
         if self.fusion_method == 'concat':
             classifier_input_features = num_features_per_seq * num_sequences
             self.classifier = nn.Sequential(
+                nn.Linear(classifier_input_features, f_dim),
+                nn.ReLU(inplace=True),
                 nn.Dropout(p=dropout_rate),
-                nn.Linear(classifier_input_features, num_classes)
+                nn.Linear(f_dim, f_dim),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=dropout_rate),
+                nn.Linear(f_dim, num_classes)
             )
         
         elif self.fusion_method == 'attention':
             self.class_token = nn.Parameter(torch.randn(1, 1, num_features_per_seq))
             self.cross_attention = CrossAttender(dim=num_features_per_seq, heads=8, depth=1)
             self.classifier = nn.Sequential(
+                nn.Linear(num_features_per_seq, f_dim),
+                nn.ReLU(inplace=True),
                 nn.Dropout(p=dropout_rate),
-                nn.Linear(num_features_per_seq, num_classes)
+                nn.Linear(f_dim, num_classes)
             )
 
     def forward(self, data_dict: Dict[str, torch.Tensor]) -> torch.Tensor:

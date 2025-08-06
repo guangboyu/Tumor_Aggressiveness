@@ -1,0 +1,57 @@
+# ==============================================================================
+# Pyradiomics Configuration for 3D Kidney CT Analysis
+# ==============================================================================
+
+# Settings for controlling the extraction process
+setting:
+  # Discretization of gray levels. For CT, a fixed bin width is recommended
+  # over normalization to maintain consistency of HU units across patients.
+  binWidth: 25
+
+  # Ensure all voxels are resampled to be isotropic (same size in all dimensions)
+  # This is critical for rotationally-invariant features.
+  resampledPixelSpacing: [1, 1, 1]  # Resample to 1x1x1 mm voxels
+
+  # Interpolator for resampling. 'sitkBSpline' is a good default for images.
+  interpolator: 'sitkBSpline'
+
+  # Set verbosity level of pyradiomics logging
+  verbosity: 'INFO'
+
+  # Correct the mask to ensure it only contains the specified label and is connected.
+  correctMask: true
+
+# Image types to be used for feature extraction.
+# 'Original' uses the raw image data.
+# 'LoG' (Laplacian of Gaussian) highlights edges and textures at different scales.
+# 'Wavelet' decomposes the image into different frequency bands.
+imageType:
+  Original: {}
+  LoG:
+    # Sigma values control the "coarseness" of the textures being highlighted.
+    # Using a range captures textures of different sizes.
+    sigma: [1.0, 2.0, 3.0]
+  Wavelet: {}
+
+# Feature classes to be enabled. All features within these classes will be extracted.
+featureClass:
+  # CRITICAL: Enable 3D shape features. These are often the most predictive.
+  shape:
+
+  # First-order statistics (histogram-based)
+  firstorder:
+
+  # Gray Level Co-occurrence Matrix (GLCM) - texture features
+  glcm:
+
+  # Gray Level Run Length Matrix (GLRLM) - texture features
+  glrlm:
+
+  # Gray Level Size Zone Matrix (GLSZM) - texture features
+  glszm:
+
+  # Gray Level Dependence Matrix (GLDM) - texture features
+  gldm:
+
+  # Neighbouring Gray Tone Difference Matrix (NGTDM) - texture features
+  ngtdm:

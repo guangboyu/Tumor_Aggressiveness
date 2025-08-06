@@ -15,6 +15,7 @@ import random
 # --- Imports from your project files ---
 # Assumes your model is in 'model.py' and your dataset is in 'dataset.py'
 from model import MultiSequenceResNet
+from model_2d import MultiSequenceResNet2D
 # from monai_dataset_v2 import MONAITumorDataLoader
 from monai_dataset_smart import MONAITumorDataLoader
 from config import Config
@@ -73,16 +74,27 @@ class Trainer:
             json.dump(vars(self.config), f, indent=2)
 
     def _init_model(self):
-        """Initializes the model based on the configuration."""
-        model = MultiSequenceResNet(
-            ct_types=self.config.ct_types,
-            num_classes=2,
-            model_depth=self.config.model_depth,
-            fusion_method=self.config.fusion_method,
-            dropout_rate=self.config.dropout_rate,
-            pretrained=self.config.pretrained,
-            pretrained_path=self.config.local_pretrained_path
-        ).to(self.device)
+        """Initializes the appropriate model (2D or 3D) based on the config."""
+        if self.config.use_2d_slices:
+            logger.info("Initializing 2D Model...")
+            model = MultiSequenceResNet2D(
+                ct_types=self.config.ct_types,
+                num_classes=2,
+                fusion_method=self.config.fusion_method, # Only concat is supported for now
+                dropout_rate=self.config.dropout_rate
+            ).to(self.device)
+        else:
+            logger.info("Initializing 3D Model...")
+            model = MultiSequenceResNet(
+                ct_types=self.config.ct_types,
+                num_classes=2,
+                model_depth=self.config.model_depth,
+                fusion_method=self.config.fusion_method,
+                dropout_rate=self.config.dropout_rate,
+                pretrained=self.config.pretrained,
+                pretrained_path=self.config.local_pretrained_path
+            ).to(self.device)
+            
         logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters.")
         return model
 
@@ -98,7 +110,9 @@ class Trainer:
             # Pass dataset-specific args
             "ct_types": self.config.ct_types,
             "target_size": tuple(self.config.target_size),
-            "apply_voi_mask": self.config.apply_voi_mask
+            "apply_voi_mask": self.config.apply_voi_mask,
+            "use_2d_slices": self.config.use_2d_slices,
+            "dilate_roi_size": self.config.dilate_roi_size,
         }
         
         loader_factory = MONAITumorDataLoader(**loader_params)
@@ -232,9 +246,9 @@ def main():
     
     # Training parameters
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--batch_size', type=int, default=4, help='Batch size for training')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size for training')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for data loading')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--lr', type=float, default=5e-5, help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-5, help='Weight decay for optimizer')
     parser.add_argument('--dropout_rate', type=float, default=0.5, help='Dropout rate in the classifier')
     parser.add_argument('--patience', type=int, default=20, help='Patience for early stopping')
@@ -245,9 +259,20 @@ def main():
     parser.add_argument('--local_pretrained_path', type=str, 
                         default='pre_trained/tencent_pretrain/resnet_18_23dataset.pth', 
                         help='Path to local pre-trained weights file')
+    parser.add_argument('--use_2d_slices', action='store_true', 
+                        help='If set, uses a 2D model on the largest mask slice instead of the full 3D volume.')
+    
+    parser.add_argument('--dilate_roi_size', type=int, default=0, 
+                        help='Kernel size for mask dilation (e.g., 3 or 5). 0 means no dilation')
+
 
     args = parser.parse_args()
-    
+
+    if args.use_2d_slices:
+        # 2D ResNet models expect at least 224x224 for ImageNet pre-training to be effective
+        logger.info("2D mode enabled. Overriding target_size to (224, 224).")
+        args.target_size = [224, 224]
+
     set_seed(args.seed)
     
     trainer = Trainer(args)
