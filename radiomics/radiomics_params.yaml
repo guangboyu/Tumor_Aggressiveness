@@ -15,11 +15,11 @@ setting:
   # Interpolator for resampling. 'sitkBSpline' is a good default for images.
   interpolator: 'sitkBSpline'
 
-  # Set verbosity level of pyradiomics logging
-  verbosity: 'INFO'
+  # # Correct the mask to ensure it only contains the specified label and is connected.
+  # correctMask: true
 
-  # Correct the mask to ensure it only contains the specified label and is connected.
-  correctMask: true
+  # first order specific settings:
+  voxelArrayShift: 1000  # Minimum value in HU is -1000, shift +1000 to prevent negative values from being squared.
 
 # Image types to be used for feature extraction.
 # 'Original' uses the raw image data.
@@ -30,28 +30,50 @@ imageType:
   LoG:
     # Sigma values control the "coarseness" of the textures being highlighted.
     # Using a range captures textures of different sizes.
-    sigma: [1.0, 2.0, 3.0]
+    sigma: [1.0, 2.0, 3.0, 4.0, 5.0]
   Wavelet: {}
 
 # Feature classes to be enabled. All features within these classes will be extracted.
 featureClass:
   # CRITICAL: Enable 3D shape features. These are often the most predictive.
-  shape:
+  shape: 
 
   # First-order statistics (histogram-based)
-  firstorder:
+  firstorder: 
 
   # Gray Level Co-occurrence Matrix (GLCM) - texture features
-  glcm:
+  glcm:  # Disable SumAverage by specifying all other GLCM features available
+    - 'Autocorrelation'
+    - 'JointAverage'
+    - 'ClusterProminence'
+    - 'ClusterShade'
+    - 'ClusterTendency'
+    - 'Contrast'
+    - 'Correlation'
+    - 'DifferenceAverage'
+    - 'DifferenceEntropy'
+    - 'DifferenceVariance'
+    - 'JointEnergy'
+    - 'JointEntropy'
+    - 'Imc1'
+    - 'Imc2'
+    - 'Idm'
+    - 'Idmn'
+    - 'Id'
+    - 'Idn'
+    - 'InverseVariance'
+    - 'MaximumProbability'
+    - 'SumEntropy'
+    - 'SumSquares'
 
   # Gray Level Run Length Matrix (GLRLM) - texture features
-  glrlm:
+  glrlm: 
 
   # Gray Level Size Zone Matrix (GLSZM) - texture features
-  glszm:
+  glszm: 
 
   # Gray Level Dependence Matrix (GLDM) - texture features
-  gldm:
+  gldm: 
 
   # Neighbouring Gray Tone Difference Matrix (NGTDM) - texture features
-  ngtdm:
+  ngtdm: 

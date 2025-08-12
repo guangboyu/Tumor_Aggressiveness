@@ -96,9 +96,9 @@ def extract_radiomics_features(manifest_path: str, output_csv_path: str, params_
 if __name__ == "__main__":
     # --- Configuration ---
     # Define the path to your manifest file and where to save the results
-    json_file = r"Data\training_manifest.json"
-    output_csv = r"Data\radiomics_features.csv"
-    params_file = r"params.yaml" # Path to your new YAML config file
+    json_file = r"Data\internal_test_manifest.json"
+    output_csv = r"Data\radiomics_features_validation.csv"
+    params_file = r"radiomics\radiomics_params.yaml" # Path to your new YAML config file
     
     # Define which CT phases you want to extract features from
     phases_to_process = ['A', 'D', 'N', 'V']

@@ -15,7 +15,7 @@ import random
 # --- Imports from your project files ---
 # Assumes your model is in 'model.py' and your dataset is in 'dataset.py'
 from model import MultiSequenceResNet
-from model_2d import MultiSequenceResNet2D
+from model_2d import MultiSequenceResNet2DRes18, MultiSequenceResNet2DEfficientNet, MultiSequenceViT2D
 # from monai_dataset_v2 import MONAITumorDataLoader
 from monai_dataset_smart import MONAITumorDataLoader
 from config import Config
@@ -77,7 +77,7 @@ class Trainer:
         """Initializes the appropriate model (2D or 3D) based on the config."""
         if self.config.use_2d_slices:
             logger.info("Initializing 2D Model...")
-            model = MultiSequenceResNet2D(
+            model = MultiSequenceViT2D(
                 ct_types=self.config.ct_types,
                 num_classes=2,
                 fusion_method=self.config.fusion_method, # Only concat is supported for now
